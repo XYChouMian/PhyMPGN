@@ -7,7 +7,7 @@ from accelerate import Accelerator
 import pprint
 import numpy as np
 import matplotlib.pyplot as plt
-from kogger import Logger
+from src.utils.kogger import Logger
 
 from src.common.config import Config
 from src.models.model import Model

@@ -3,9 +3,9 @@ import torch.nn as nn
 
 from .mpnn_block import MPNNBlock
 from .encoder_decoder import Encoder, Decoder
+from .laplace_block import LaplaceBlock
 from src.utils.padding import graph_padding
 from src.datasets.data import Graph
-from src.models.laplace_block import LaplaceBlock
 
 
 class Model(nn.Module):
@@ -45,7 +45,7 @@ class Model(nn.Module):
         Returns:
 
         """
-        loss_states = [graph.y] # [bn, 2]
+        loss_states = [graph.y]  # [bn, 2]
         # unroll for 1 step
         graph_next = self.update(graph)
         loss_states.append(graph_next.y)
@@ -62,7 +62,7 @@ class Model(nn.Module):
         loss_states = torch.stack(loss_states, dim=0)
         return torch.index_select(loss_states, 1, graph.truth_index)
 
-    def get_temporal_diff(self, graph):
+    def get_temporal_diff(self, graph: Graph):
         """
 
         Args:
@@ -84,7 +84,7 @@ class Model(nn.Module):
                 graph.state_node, 0, graph.inlet_index)
 
         rel_state = graph.y[graph.edge_index[1, :]] - \
-                    graph.y[graph.edge_index[0, :]]  # (be, 2)
+            graph.y[graph.edge_index[0, :]]  # (be, 2)
         # (be, 5) -> (be, h)
         graph.state_edge = self.edge_encoder(
             torch.cat((rel_state, graph.edge_attr), dim=-1))
@@ -92,7 +92,7 @@ class Model(nn.Module):
         decoder_out = self.decoder(mpnn_out)  # (bn, 2)
 
         # laplace
-        laplace = self.laplace_block(graph) # (bn, 2)
+        laplace = self.laplace_block(graph)  # (bn, 2)
 
         # gt_e5_index = laplace > 1.0e+3
         # gt_e5 = torch.sum(gt_e5_index, dim=0)
@@ -126,7 +126,8 @@ class Model(nn.Module):
         # plt.show()
 
         # (bn, 1) * (bn, 2) + (bn, 2) -> (bn, 2)
-        u_m, rho, D, mu = graph.u_m, graph.rho, graph.r * 2, graph.mu  # (bn, 1)
+        u_m, rho, D, mu = graph.u_m, graph.rho, graph.r * \
+            2, graph.mu  # (bn, 1)
         Re = rho * D * u_m / mu  # (bn, 1)
         out = 1 / Re * laplace + decoder_out
         # out = decoder_out
@@ -142,7 +143,6 @@ class Model(nn.Module):
         # out_max = out.max()
         # out = self.mu * laplace + decoder_out
         return out
-
 
     def update_euler(self, graph):
         out = self.get_temporal_diff(graph)

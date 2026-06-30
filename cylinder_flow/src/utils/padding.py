@@ -51,14 +51,14 @@ def graph_padding(graph, clone=False):
 def h_padding(h, graph):
     if hasattr(graph, 'dirichlet_index'):
         h = dirichlet_padding(h, graph.dirichlet_index,
-                                    graph.dirichlet_h_value)
+                              graph.dirichlet_h_value)
     if hasattr(graph, 'inlet_index'):
         h = dirichlet_padding(h, graph.inlet_index,
-                                    graph.inlet_h_value)
+                              graph.inlet_h_value)
     if hasattr(graph, 'periodic_src_index'):
         h = periodic_padding(h, graph.periodic_src_index,
-                                   graph.periodic_tgt_index)
+                             graph.periodic_tgt_index)
     if hasattr(graph, 'neumann_src_index'):
         h = neumann_padding(h, graph.neumann_src_index,
-                                  graph.neumann_tgt_index)
+                            graph.neumann_tgt_index)
     return h

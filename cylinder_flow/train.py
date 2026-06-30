@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.loader import DataLoader
 from accelerate import Accelerator
-from kogger import Logger
+from src.utils.kogger import Logger
 import pprint
 
 from src.common.config import Config

@@ -1,4 +1,4 @@
-from kogger import Logger
+from src.utils.kogger import Logger
 import pprint
 
 from src.common.config import Config

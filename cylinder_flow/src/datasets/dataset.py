@@ -56,14 +56,14 @@ class PDEGraphDataset(InMemoryDataset):
         transform.append(self.node_type_trans)
         transform.append(self.graph_trans)
 
-
         super(PDEGraphDataset, self).__init__(
             root=root,
             transform=None,
             pre_transform=T.Compose(transform),
             pre_filter=None
         )
-        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+        self.data, self.slices = torch.load(
+            self.processed_paths[0], weights_only=False)
 
     @property
     def raw_file_names(self) -> Union[str, List[str], Tuple]:
@@ -87,7 +87,7 @@ class PDEGraphDataset(InMemoryDataset):
         node_type = file_handler['node_type']
         inlet_index, cylinder_index, outlet_index, inner_index = \
             node_type['inlet'][:], node_type['cylinder'][:], \
-                node_type['outlet'][:], node_type['inner'][:]
+            node_type['outlet'][:], node_type['inner'][:]
         self.dirichlet_trans.set_index(cylinder_index)
         self.inlet_trans.set_index(inlet_index)
         self.node_type_trans.set_type_dict(node_type)
@@ -137,7 +137,8 @@ class PDEGraphDataset(InMemoryDataset):
             data_list = [self.pre_transform(data) for data in data_list]
 
         if osp.exists(self.processed_paths[1]):
-            laplace_matrix = torch.load(self.processed_paths[1], weights_only=False)
+            laplace_matrix = torch.load(
+                self.processed_paths[1], weights_only=False)
             d_vector = torch.load(self.processed_paths[2], weights_only=False)
         else:
             laplace_matrix, d_vector = compute_discrete_laplace(data_list[0])
@@ -183,4 +184,3 @@ class PDEGraphDataset(InMemoryDataset):
         pos = pos * D
 
         return U_pred, U_gt, pos
-

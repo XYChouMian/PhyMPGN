@@ -77,7 +77,7 @@ class Config:
 
 
 def test():
-    from kogger import Logger
+    from src.utils.kogger import Logger
 
     args = Config.get_parser().parse_args()
     config = Config(yaml_filename=args.filename)

@@ -48,11 +48,13 @@ class MPNNLayer(MessagePassing):
         return self.propagate(edge_index, h=hidden_node, hidden_edge=hidden_edge)
 
     def message(self, h_i, h_j, hidden_edge):
-        phi_input = torch.cat([h_i, h_j-h_i, hidden_edge], dim=1)  # (e, h_features*2 + hidden_edge_features)
+        # (e, h_features*2 + hidden_edge_features)
+        phi_input = torch.cat([h_i, h_j-h_i, hidden_edge], dim=1)
         return self.phi(phi_input)  # (e, phi_out_features)
 
     def update(self, aggr, h):
-        gamma_input = torch.cat([h, aggr], dim=1)  # (num_nodes, h_features + phi_out_features)
+        # (num_nodes, h_features + phi_out_features)
+        gamma_input = torch.cat([h, aggr], dim=1)
         out = self.gamma(gamma_input)  # (num_nodes, gamma_out_features)
         return out
 
