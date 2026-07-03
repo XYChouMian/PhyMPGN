@@ -249,146 +249,99 @@ class WaveGraphDataset(InMemoryDataset):
         pass
 
     def process(self):
-        # 优化内存：分批处理数据
+        data_list = []
         file_handler = h5py.File(osp.join(self.root, self.raw_files))
 
         # 读取图结构信息（所有数据集共享）
         pos = file_handler['pos'][:]  # (n, 2)
-        mesh = file_handler['mesh'][:]  # (n_faces, 3)
+        # mesh = file_handler['mesh'][:]  # (n_faces, 3)
 
         # 读取边界信息
         node_type = file_handler['node_type']
         boundary_index, inner_index = node_type['boundary'][:], node_type['inner'][:]
         self.dirichlet_trans.set_index(boundary_index)
 
-        # 转换基本张量（只转换一次）
-        pos_t = torch.tensor(pos, dtype=self.dtype)
-        truth_index = torch.arange(pos.shape[0], dtype=torch.long)
-
-        # 先创建第一个样本用于计算拉普拉斯矩阵
-        g = file_handler[str(self.dataset_start)]
-        U = g['U']
-        c = g.attrs['c']
-        dt = g.attrs['dt']
-
-        # 创建第一个样本（仅用于拉普拉斯矩阵计算）
-        U_t = torch.tensor(np.array(U), dtype=self.dtype)
-        y_sample = U_t[0:0 + self.window_size].transpose(0, 1)
-        c_t = torch.ones((pos.shape[0], 1), dtype=torch.float32) * c
-        dt_t = torch.ones((pos.shape[0], 1), dtype=torch.float32) * dt
-
-        sample_graph = Graph(
-            pos=pos_t.clone(),
-            y=y_sample.clone(),
-            truth_index=truth_index.clone(),
-            c=c_t.clone(),
-            dt=dt_t.clone(),
-        )
-
-        # 应用变换
-        if self.pre_transform is not None:
-            sample_graph = self.pre_transform(sample_graph)
-
-        # 计算拉普拉斯矩阵
-        if osp.exists(self.processed_paths[1]):
-            laplace_matrix = torch.load(
-                self.processed_paths[1], weights_only=False)
-            d_vector = torch.load(self.processed_paths[2], weights_only=False)
-        else:
-            print("计算拉普拉斯矩阵...")
-            laplace_matrix, d_vector = compute_discrete_laplace(sample_graph)
-            laplace_matrix = laplace_matrix.clone()
-            d_vector = d_vector.unsqueeze(dim=-1).clone()
-            torch.save(laplace_matrix, self.processed_paths[1])
-            torch.save(d_vector, self.processed_paths[2])
-            print("拉普拉斯矩阵计算完成并保存")
-
-        # 释放第一个样本的内存
-        del sample_graph, U_t, y_sample, c_t, dt_t
-        import gc
-        gc.collect()
-
-        # 分批处理：每次处理一个数据集
-        data_list = []
+        # 为每个数据集生成样本
         for i in range(self.dataset_start, self.dataset_used):
-            print(f"处理数据集 {i+1}/{self.dataset_used}")
+            # 读取波场数据
             g = file_handler[str(i)]
             U = g['U']  # (timesteps, n_nodes, 1)
+
+            # 假设每个数据集的波速和dt存储在属性中
+            # 如果没有，需要从数据中推断或使用默认值
             c = g.attrs['c']
             dt = g.attrs['dt']
 
-            # 存储物理参数
+            # 存储当前数据集的物理参数
             self.wave_speeds.append(c)
             self.time_steps.append(dt)
 
             # 转换为张量
             U_t = torch.tensor(np.array(U), dtype=self.dtype)  # (t, n, 1)
+            pos_t = torch.tensor(pos, dtype=self.dtype)
+            truth_index = torch.arange(pos.shape[0], dtype=torch.long)  # (n,)
+
+            # 创建物理参数张量（每个节点都有相同的参数值）
             c_t = torch.ones((pos.shape[0], 1), dtype=torch.float32) * c
             dt_t = torch.ones((pos.shape[0], 1), dtype=torch.float32) * dt
 
-            # 生成滑动窗口样本（分批）
-            num_windows = (self.time_used) // self.window_size
-            print(f"  生成 {num_windows} 个时间窗口样本...")
-
-            for window_idx, start_idx in enumerate(range(self.time_start,
-                                                           self.time_start + self.time_used,
-                                                           self.window_size)):
-                if start_idx + self.window_size > self.time_start + self.time_used:
+            # 生成滑动窗口样本
+            # 提取时间窗口数据: [t, n, 1] -> [n, t, 1]
+            for idx in torch.arange(self.time_start,
+                                    self.time_start + self.time_used,
+                                    step=self.window_size):
+                if idx + self.window_size > self.time_start + self.time_used:
                     break
-
-                y = U_t[start_idx:start_idx + self.window_size].transpose(0, 1)
-                if self.training:
+                y = U_t[idx:idx + self.window_size].transpose(0, 1)
+                if self.training:  # 训练时添加噪声
+                    if idx == 0:
+                        print("-"*60)
+                        print(y.shape)
                     y[:, 0, :] = add_noise_to_single_variable(
                         y[:, 0, :], percentage=0.03)
-
-                # 创建图数据
-                data = Graph(
+                data_list.append(Graph(
                     pos=pos_t.clone(),
                     y=y.clone(),
                     truth_index=truth_index.clone(),
                     c=c_t.clone(),
                     dt=dt_t.clone(),
-                )
+                ))
 
-                # 添加拉普拉斯矩阵和边界条件
-                data.laplace_matrix = laplace_matrix
-                data.d_vector = d_vector
-                if hasattr(data, 'dirichlet_index'):
-                    data.dirichlet_value = torch.zeros(
-                        (data.dirichlet_index.shape[0], data.y.shape[2])
-                    )
-
-                # 应用预变换
-                if self.pre_transform is not None:
-                    data = self.pre_transform(data)
-
-                # padding
-                graph_padding(data, clone=True)
-
-                data_list.append(data)
-
-                # 定期清理内存
-                if window_idx % 100 == 0:
-                    gc.collect()
-                    print(f"    处理进度: {window_idx}/{num_windows}")
-
-            # 每处理完一个数据集后清理内存
-            del U_t, c_t, dt_t
-            gc.collect()
-            print(f"  数据集 {i+1} 处理完成，当前样本数: {len(data_list)}")
-
-        file_handler.close()
-
-        # 应用预滤波
+        # 应用预滤波和预变换
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
 
-        print(f"最终样本数: {len(data_list)}，开始保存...")
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
 
-        # 合并所有样本并保存
+        # 计算或加载拉普拉斯矩阵
+        if osp.exists(self.processed_paths[1]):
+            laplace_matrix = torch.load(
+                self.processed_paths[1], weights_only=False)
+            d_vector = torch.load(self.processed_paths[2], weights_only=False)
+        else:
+            laplace_matrix, d_vector = compute_discrete_laplace(data_list[0])
+            laplace_matrix = laplace_matrix.clone()
+            d_vector = d_vector.unsqueeze(dim=-1).clone()
+            torch.save(laplace_matrix, self.processed_paths[1])
+            torch.save(d_vector, self.processed_paths[2])
+
+        # 为每个样本添加拉普拉斯矩阵和边界条件值
+        for data in data_list:
+            data.laplace_matrix = laplace_matrix
+            data.d_vector = d_vector
+
+            # 设置 Dirichlet 边界条件值
+            if hasattr(data, 'dirichlet_index'):
+                data.dirichlet_value = torch.zeros(
+                    (data.dirichlet_index.shape[0], data.y.shape[2])
+                )
+
+            graph_padding(data, clone=True)
+
+        # 合并所有样本
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
-        print("数据保存完成")
 
     def get_dataset_parameters(self):
         """
