@@ -14,8 +14,8 @@ time_used: 2000
 learning_rate: 2.5e-4
 steplr_size: 200
 steplr_gamma: 0.96
-start_epoch: 221
-epochs: 1380
+start_epoch: 0
+epochs: 1600
 window_size: 10
 val_window_size: 10
 te_window_size: 2000

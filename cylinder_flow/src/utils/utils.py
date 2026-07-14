@@ -30,6 +30,11 @@ class NodeType(enum.IntEnum):
     OBSTACLE = 1
     INLET = 2
     OUTLET = 3
+    
+    
+class WaveNodeType(enum.IntEnum):
+    NORMAL = 0
+    DIRICHLET = 1
 
 
 def activation_func():
@@ -149,3 +154,29 @@ def add_noise(truth, percentage=0.05):
         noise = R * std_T / std_R * percentage
         uv_noi.append(truth+noise)
     return torch.cat(uv_noi, dim=1)
+
+
+def add_noise_to_single_variable(truth, percentage=0.05):
+    """
+    针对 (n, 1) 的单变量张量添加噪声
+    Args:
+        truth: 输入张量，形状为 (n, 1)
+        percentage: 噪声幅度比例
+    """
+    assert truth.dim() == 2 and truth.shape[1] == 1, "输入张量形状必须为 (n, 1)"
+    
+    # 生成噪声分布，与 truth 同形状
+    R = torch.normal(mean=0.0, std=1.0, size=truth.shape)
+    
+    # 使用 unbiased=False 计算总体标准差，防止 N=1 时自由度错误
+    std_R = torch.std(R, unbiased=False)
+    std_T = torch.std(truth, unbiased=False)
+    
+    # 引入 eps 防止除以 0
+    eps = 1e-8
+    
+    # 计算噪声并叠加
+    # 逻辑：将噪声 R 的标准差归一化到与 truth 一致，再乘以 percentage
+    noise = R * (std_T / (std_R + eps)) * percentage
+    
+    return truth + noise

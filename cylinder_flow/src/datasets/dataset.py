@@ -8,7 +8,7 @@ from typing import Union, List, Tuple
 
 from .data import Graph
 from .transform import Periodic, Dirichlet, Neumann, \
-    MyDistance, MyCartesian, DirichletInlet, MaskFace, NodeTypeInfo
+    MyDistance, MyCartesian, DirichletInlet, MaskFace, NodeTypeInfo, WaveNodeTypeInfo
 from src.utils.utils import add_noise, add_noise_to_single_variable
 from src.utils.padding import graph_padding
 from src.models.voronoi_laplace import compute_discrete_laplace
@@ -211,15 +211,11 @@ class WaveGraphDataset(InMemoryDataset):
 
         # 边界条件变换器
         self.dirichlet_trans = Dirichlet()
-        self.neumann_trans = None  # 暂时不使用Neumann边界条件
-        self.node_type_trans = NodeTypeInfo()
+        self.node_type_trans = WaveNodeTypeInfo()
 
         # 图变换
         transform = []
-        if self.dirichlet_trans is not None:
-            transform.append(self.dirichlet_trans)
-        if self.neumann_trans is not None:
-            transform.append(self.neumann_trans)
+        transform.append(self.dirichlet_trans)
         transform.append(self.node_type_trans)
         transform.append(T.Compose([
             T.Delaunay(),
@@ -294,17 +290,14 @@ class WaveGraphDataset(InMemoryDataset):
                     break
                 y = U_t[idx:idx + self.window_size].transpose(0, 1)
                 if self.training:  # 训练时添加噪声
-                    if idx == 0:
-                        print("-"*60)
-                        print(y.shape)
                     y[:, 0, :] = add_noise_to_single_variable(
                         y[:, 0, :], percentage=0.03)
                 data_list.append(Graph(
-                    pos=pos_t.clone(),
-                    y=y.clone(),
-                    truth_index=truth_index.clone(),
-                    c=c_t.clone(),
-                    dt=dt_t.clone(),
+                    pos=pos_t,
+                    y=y,
+                    truth_index=truth_index,
+                    c=c_t,
+                    dt=dt_t,
                 ))
 
         # 应用预滤波和预变换
@@ -332,10 +325,9 @@ class WaveGraphDataset(InMemoryDataset):
             data.d_vector = d_vector
 
             # 设置 Dirichlet 边界条件值
-            if hasattr(data, 'dirichlet_index'):
-                data.dirichlet_value = torch.zeros(
-                    (data.dirichlet_index.shape[0], data.y.shape[2])
-                )
+            data.dirichlet_value = torch.zeros(
+                (data.dirichlet_index.shape[0], data.y.shape[2])
+            )
 
             graph_padding(data, clone=True)
 

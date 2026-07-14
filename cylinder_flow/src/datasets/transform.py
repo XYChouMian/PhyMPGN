@@ -3,7 +3,7 @@ from torch_geometric.transforms import BaseTransform
 from torch_geometric.data import Data
 import torch
 
-from src.utils.utils import NodeType
+from src.utils.utils import NodeType, WaveNodeType
 
 
 @functional_transform('my_cartesian')
@@ -42,7 +42,7 @@ class MyCartesian(BaseTransform):
         return data
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(norm={self.norm}'
+        return f'{self.__class__.__name__}(norm={self.norm})'
 
 
 @functional_transform('my_distance')
@@ -54,6 +54,7 @@ class MyDistance(BaseTransform):
         norm (bool, optional): If set to :obj:`False`, the output will not be
             normalized to the interval :math:`[0, 1]`. (default: :obj:`False`)
     """
+
     def __init__(self, norm: bool = False):
         self.norm = norm
 
@@ -75,7 +76,7 @@ class MyDistance(BaseTransform):
         return data
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(norm={self.norm}'
+        return f'{self.__class__.__name__}(norm={self.norm})'
 
 
 @functional_transform('periodic')
@@ -221,7 +222,6 @@ class Neumann(BaseTransform):
             else:
                 return False
 
-
         for i in range(pos.shape[0]):
             x1, y1 = pos[i]
             if 0 < self.bdry - x1 < self.distance and not on_circle(x1, y1):
@@ -242,7 +242,7 @@ class Neumann(BaseTransform):
                     tan = (y1 - self.y0) / (x1 - self.x0)
                     cos_2 = 1 / (1 + tan**2)  # cos^2 = 1 / tan^2
                     # sin^2 = tan^2 / (1 + tan^2)
-                    sin_2 =  tan**2 / (1 + tan**2)
+                    sin_2 = tan**2 / (1 + tan**2)
                     if x1 - self.x0 > 0:
                         cos = torch.sqrt(cos_2)
                     else:
@@ -262,6 +262,7 @@ class Neumann(BaseTransform):
                                          dtype=torch.long)
         self.target_index = torch.tensor(list(tgt2src.keys()),
                                          dtype=torch.long)
+
 
 # todo remove
 @functional_transform('mask_face')
@@ -324,4 +325,28 @@ class NodeTypeInfo(BaseTransform):
         outlet_index = self.type_dict['outlet'][:]
         outlet_index = torch.tensor(outlet_index, dtype=torch.long)
         node_type[outlet_index] = NodeType.OUTLET
+        return node_type
+
+
+@functional_transform('wave_node_type_info')
+class WaveNodeTypeInfo(BaseTransform):
+    def __init__(self):
+        self.node_type = None
+
+    def is_none(self):
+        return self.node_type is None
+
+    def __call__(self, data):
+        if self.is_none():
+            self.node_type = self.cal_node_type(data)
+
+        data.node_type = self.node_type
+        return data
+
+    def cal_node_type(self, data):
+        node_num = data.pos.shape[0]
+        node_type = torch.ones(node_num, dtype=torch.long) * WaveNodeType.NORMAL
+        if hasattr(data, 'dirichlet_index'):
+            node_type[data.dirichlet_index] = WaveNodeType.DIRICHLET
+
         return node_type

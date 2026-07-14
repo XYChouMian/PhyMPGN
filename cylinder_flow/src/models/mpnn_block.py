@@ -23,7 +23,7 @@ class MPNNBlock(nn.Module):
     def forward(self, graph):
         """
         :param graph: Data(y=[bxn, 2], pos=[bxn, 2], edge_index=[2, bxn], batch=[bxn])
-        :return:
+        :return: h=[bxn, features]
         """
         h = graph.state_node
         for mpnn in self.nets[:-1]:

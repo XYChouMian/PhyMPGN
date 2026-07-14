@@ -52,7 +52,7 @@ def compute_weight_matrix(graph):
     e = graph.edge_index.shape[1]
     weights = torch.zeros((n, n))
     eps = torch.finfo(torch.float32).eps
-    for e_i in tqdm(range(e)):
+    for e_i in tqdm(range(e), desc="Computing weight matrix (edges)"):
         edge = graph.edge_index[:, e_i]
         i, j = edge
         nodes = find_opposite_nodes(edge, graph.face)
@@ -90,7 +90,7 @@ def compute_d_vector(graph):
     """
     d_vector = []
     n = graph.pos.shape[0]
-    for i in tqdm(range(n)):
+    for i in tqdm(range(n), desc="Computing d vector (Voronoi areas)"):
         tris = find_node_triangles(i, graph.face)
         area = compute_all_voronoi_area(graph.pos, tris)
         d_vector.append(area)

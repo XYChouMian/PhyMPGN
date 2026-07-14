@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch_geometric.data import Data
 
 from .mpnn_block import MPNNLayer
 
@@ -30,10 +31,22 @@ class LaplaceBlock(nn.Module):
         laplace = laplace_matrix @ graph.y  # (bn, 2)
         return laplace
 
-    def forward(self, graph):
+    def forward(self, graph: Data):
         h = self.encoder(torch.cat((graph.y, graph.pos), dim=-1))
+
+        # print("=" * 50)
+        # print("调试，测试索引 edge_index:")
+        # graph.edge_index
+        # print(f"{graph.edge_index.shape=}")
+        # print(f"{graph.edge_index.dtype=}")
+        # print("=" * 50)
+        # raise
+        # print("="*50)
+        # print(h.shape)
+        # print(graph.edge_attr.shape)
+        # print("="*50)
         edge_attr = graph.edge_attr[:, :3]
-        h = self.processor(h, edge_attr, graph.edge_index)
+        h = self.processor.forward(h, edge_attr, graph.edge_index)
         out = self.decoder(h)
         out = graph.d_vector * out
 
@@ -62,7 +75,7 @@ class LaplaceProcessor(nn.Module):
     def forward(self, h, edge_attr, edge_index):
         """
         :param graph: Data(y=[bxn, 2], pos=[bxn, 2], edge_index=[2, bxn], batch=[bxn])
-        :return:
+        :return: h=[bxn, features]
         """
         for mpnn in self.nets:
             h = h + mpnn(h, edge_attr, edge_index)
