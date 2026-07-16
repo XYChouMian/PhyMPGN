@@ -291,7 +291,8 @@ class WaveModel(nn.Module):
 
         # laplace
         # laplace = self.laplace_block.forward(graph)  # (bn, 2)
-        out = decoder_out  # 对于波方程，∂²u/∂t² = c² * ∇²u
+        out = decoder_out
+        # out = graph.c ** 2 * laplace + decoder_out  # 对于波方程，∂²u/∂t² = c² * ∇²u
         return out
 
     def update_euler(self, graph: Graph):
