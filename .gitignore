@@ -10,6 +10,7 @@ __pycache__/
 data/
 ckpts/
 src/
+!cylinder_flow/src/
 visualization/
 runs/
 test*
