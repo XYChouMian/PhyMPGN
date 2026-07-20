@@ -1,0 +1,64 @@
+# random seed
+random_seed: 66
+
+# data precision
+precision: float32
+
+# super parameters
+dataset_start: 0
+dataset_used: 2
+te_dataset_start: 0
+te_dataset_used: 1
+time_start: 0
+time_used: 2000
+learning_rate: 2.5e-4
+steplr_size: 200
+steplr_gamma: 0.96
+start_epoch: 0
+epochs: 1600
+window_size: 10
+te_window_size: 4000
+batch_size: 1
+num_workers: 4
+window_shuffle: true
+
+# network architecture
+integral: 2
+encoder_config:
+  node_encoder_layers: [8, 32, 64, 128]
+  edge_encoder_layers: [5, 32, 64, 128]
+
+mpnn_block_config:
+  mpnn_layers:
+    - [384, 128, 128, 128, 128]
+    - [256, 128, 128, 128, 128]
+  mpnn_num: 5
+
+decoder_config:
+  node_decoder_layers: [128, 64, 32, 2]
+
+laplace_block_config:
+  in_dim: 4
+  h_dim: 24
+  out_dim: 2
+
+# experiment name and path
+experiment_name: bl_expr_0
+continuous_train: false
+ckpt_path_tr: /home/wqx/projects/PhyMPGN/ckpts/bl_ckpt-{}-tr
+ckpt_path_val: /home/wqx/projects/PhyMPGN/ckpts/bl_ckpt-{}-val
+work_path: /home/wqx/projects/PhyMPGN
+
+# data path
+data_root_dir: /home/wqx/projects/PhyMPGN/data/2d_bl
+tr_processed_file: tr_data.pt
+val_processed_file: tr_data.pt
+te_processed_file: te_data.pt
+
+tr_raw_data: train_bl_2x2000x8050x2.h5
+val_raw_data: train_bl_2x2000x8050x2.h5
+te_raw_data: test_bl_1x4000x8050x2.h5
+
+# log
+log_file: /home/wqx/projects/PhyMPGN/logs/bl_out-{}.log
+log_dir: /home/wqx/projects/PhyMPGN/runs/bl_expr_{}

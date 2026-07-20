@@ -360,6 +360,173 @@ class WaveModel(nn.Module):
         return total, mpnn, laplace
 
 
+class BLModel(nn.Module):
+    """边界层流模型，基于不可压缩 N-S 方程"""
+
+    def __init__(self, encoder_config, mpnn_block_config, decoder_config,
+                 laplace_block_config, dtype, device, integral):
+        super(BLModel, self).__init__()
+        self.dtype = dtype
+        self.device = device
+
+        self.node_encoder = Encoder(encoder_config['node_encoder_layers'])
+        self.edge_encoder = Encoder(encoder_config['edge_encoder_layers'])
+        self.mpnn_block = MPNNBlock(
+            mpnn_layers=mpnn_block_config['mpnn_layers'],
+            mpnn_num=mpnn_block_config['mpnn_num']
+        )
+        self.decoder = Decoder(decoder_config['node_decoder_layers'])
+        self.laplace_block = LaplaceBlock(
+            enc_dim=laplace_block_config['in_dim'],
+            h_dim=laplace_block_config['h_dim'],
+            out_dim=laplace_block_config['out_dim']
+        )
+
+        update_fn = {
+            1: self.update_euler,
+            2: self.update_rk2,
+            4: self.update_rk4
+        }
+        self.update = update_fn[integral]
+
+    def forward(self, graph: Graph, steps):
+        """
+        前向传播：roll-out 预测
+
+        Args:
+            graph (Graph): Graph(y=(n, 2), pos=(n, 2), edge_index=(2, e),
+                laplace_matrix=(n, n), Uinf, delta99, mu, rho, dt)
+            steps (int): roll-out 步数
+
+        Returns:
+            loss_states: [t, n', 2] 预测的速度序列
+        """
+        loss_states = [graph.y]  # [n, 2]
+        # unroll for 1 step
+        graph_next = self.update(graph)
+        loss_states.append(graph_next.y)
+
+        graph = graph_next.detach()
+        # unroll for steps-1
+        for step in range(steps - 1):
+            graph_next = self.update(graph)
+            loss_states.append(graph_next.y)
+            graph = graph_next
+
+        # [t, n, 2]
+        loss_states = torch.stack(loss_states, dim=0)
+        # 只返回 truth_index 对应的节点（排除边界）
+        return torch.index_select(loss_states, 1, graph.truth_index)
+
+    def get_temporal_diff(self, graph: Graph):
+        """
+        计算时间导数 du/dt
+
+        Args:
+            graph (Graph): 输入图数据
+
+        Returns:
+            out: [n, 2] 时间导数
+        """
+        # 节点编码: [y:2 + pos:2 + node_type:4] -> [n, h]
+        node_type = torch.nn.functional.one_hot(graph.node_type)
+        graph.state_node = self.node_encoder(
+            torch.cat((graph.y, graph.pos, node_type), dim=-1))
+
+        # 存储边界节点的隐藏状态（用于 padding）
+        if hasattr(graph, 'dirichlet_index'):
+            graph.dirichlet_h_value = torch.index_select(
+                graph.state_node, 0, graph.dirichlet_index)
+        if hasattr(graph, 'inlet_index'):
+            graph.inlet_h_value = torch.index_select(
+                graph.state_node, 0, graph.inlet_index)
+
+        # 边编码: [relative_y:2 + edge_attr:3 (distance, cartesian_x, cartesian_y)] -> [e, h]
+        rel_state = graph.y[graph.edge_index[1, :]] - \
+            graph.y[graph.edge_index[0, :]]  # [e, 2]
+        graph.state_edge = self.edge_encoder(
+            torch.cat((rel_state, graph.edge_attr), dim=-1))
+
+        # MPNN 消息传递
+        mpnn_out = self.mpnn_block(graph)  # [n, h]
+        decoder_out = self.decoder(mpnn_out)  # [n, 2]
+
+        # 拉普拉斯项（粘性扩散）
+        laplace = self.laplace_block(graph)  # [n, 2]
+
+        # 边界层流物理模型: du/dt = (1/Re) * ∇²u + convection + pressure
+        # 这里简化为: du/dt = (1/Re) * ∇²u + NN(u, x, t)
+        Uinf, delta99, mu = graph.Uinf, graph.delta99, graph.mu  # [n, 1]
+        Re = Uinf * delta99 / mu  # [n, 1] 边界层雷诺数
+        out = 1 / Re * laplace + decoder_out
+
+        return out
+
+    def update_euler(self, graph: Graph):
+        out = self.get_temporal_diff(graph)
+        graph.y = graph.y + out * graph.dt
+        # padding
+        graph_padding(graph)
+
+        return graph
+
+    def update_rk2(self, graph: Graph):
+
+        U0 = graph.y
+        K1 = self.get_temporal_diff(graph)  # (bn, 2)
+        U1 = U0 + K1 * graph.dt  # (bn, 2) + (bn, 2) * (bn, 1) -> (bn, 2)
+        graph.y = U1
+        # padding
+        graph_padding(graph)
+
+        K2 = self.get_temporal_diff(graph)
+        graph.y = U0 + K1 * graph.dt / 2 + K2 * graph.dt / 2
+        # padding
+        graph_padding(graph)
+
+        return graph
+
+    def update_rk4(self, graph: Graph):
+        # stage 1
+        U0 = graph.y
+        K1 = self.get_temporal_diff(graph)
+
+        # stage 2
+        U1 = U0 + K1 * graph.dt / 2.
+        graph.y = U1
+        # padding
+        graph_padding(graph)
+        K2 = self.get_temporal_diff(graph)
+
+        # stage 3
+        U2 = U0 + K2 * graph.dt / 2.
+        graph.y = U2
+        # padding
+        graph_padding(graph)
+        K3 = self.get_temporal_diff(graph)
+
+        # stage 4
+        U3 = U0 + K3 * graph.dt
+        graph.y = U3
+        # padding
+        graph_padding(graph)
+        K4 = self.get_temporal_diff(graph)
+
+        U4 = U0 + (K1 + 2 * K2 + 2 * K3 + K4) * graph.dt / 6.
+        graph.y = U4
+        # padding
+        graph_padding(graph)
+
+        return graph
+
+    def count_parameters(self):
+        total = sum([param.nelement() for param in self.parameters()])
+        mpnn = self.mpnn_block.count_parameters()
+        laplace = self.laplace_block.count_parameters()
+        # laplace = 0
+        return total, mpnn, laplace
+
+
 class MyLoss(nn.Module):
     def __init__(self):
         super(MyLoss, self).__init__()

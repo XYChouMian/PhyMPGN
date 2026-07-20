@@ -373,3 +373,530 @@ class WaveGraphDataset(InMemoryDataset):
         pos_dim = pos * L
 
         return U_pred_dim, U_gt_dim, pos_dim
+
+
+class BLGraphDataset(InMemoryDataset):
+    def __init__(self, root, raw_files, processed_file, dataset_start,
+                 dataset_used, time_start, time_used, window_size, dtype,
+                 training=False):
+        self.raw_files = raw_files
+        self.processed_file = processed_file
+        self.laplace_file = 'laplace.pt'
+        self.d_file = 'd_vector.pt'
+        self.root = root
+        self.training = training
+
+        self.dataset_start = dataset_start
+        self.dataset_used = dataset_used
+        self.time_start = time_start
+        self.time_used = time_used
+        self.window_size = window_size
+        self.dtype = dtype
+
+        # 边界条件变换器
+        # wall → Dirichlet (U=V=0), inlet → DirichletInlet (来流速度)
+        self.dirichlet_trans = Dirichlet()
+        self.inlet_trans = DirichletInlet()
+        self.node_type_trans = NodeTypeInfo()
+
+        # 图变换：使用 Delaunay 三角化生成图结构
+        self.graph_trans = T.Compose([
+            T.Delaunay(),
+            T.FaceToEdge(remove_faces=False),
+            MyDistance(norm=True),
+            MyCartesian(norm=True),
+        ])
+
+        transform = []
+        transform.append(self.dirichlet_trans)
+        transform.append(self.inlet_trans)
+        transform.append(self.node_type_trans)
+        transform.append(self.graph_trans)
+
+        super(BLGraphDataset, self).__init__(
+            root=root,
+            transform=None,
+            pre_transform=T.Compose(transform),
+            pre_filter=None
+        )
+        self.data, self.slices = torch.load(
+            self.processed_paths[0], weights_only=False)
+        # super().__init__() 执行完毕意味着 process() 已完成，laplace.pt 已存在
+        # 加载 laplace_matrix 作为 Dataset 属性，所有样本共享同一引用
+        # 避免 collate 时每个样本都复制一份 8050×8050 矩阵
+        self.laplace_matrix = torch.load(
+            self.processed_paths[1], weights_only=False)
+        self.d_vector = torch.load(
+            self.processed_paths[2], weights_only=False)
+
+    def get(self, idx):
+        """获取单个样本，动态添加共享的 laplace_matrix（避免 collate 时复制）"""
+        data = super().get(idx)
+        data.laplace_matrix = self.laplace_matrix
+        data.d_vector = self.d_vector
+        
+        Uinf
+        return data
+
+    @property
+    def raw_file_names(self) -> Union[str, List[str], Tuple]:
+        return self.raw_files
+
+    @property
+    def processed_file_names(self) -> Union[str, List[str], Tuple]:
+        return [self.processed_file, self.laplace_file, self.d_file]
+
+    def download(self):
+        pass
+
+    def process(self):
+        data_list = []
+        file_handler = h5py.File(osp.join(self.root, self.raw_files))
+
+        # 读取图结构信息
+        pos = file_handler['pos'][:]  # (n, 2)
+
+        # 读取物理参数
+        Uinf = file_handler.attrs['Uinf']
+        delta99 = file_handler.attrs['delta99']
+        Uinf_scalar = torch.tensor(Uinf, dtype=torch.float32)
+        delta99_scalar = torch.tensor(delta99, dtype=torch.float32)
+
+        # 读取节点类型并设置边界条件
+        node_type = file_handler['node_type']
+        wall_index, inlet_index = \
+            node_type['wall'][:], node_type['inlet'][:]
+        self.dirichlet_trans.set_index(wall_index)
+        self.inlet_trans.set_index(inlet_index)
+        self.node_type_trans.set_type_dict(node_type)
+
+        # 无量纲化特征尺度
+        pos_dimless = pos / delta99
+
+        for i in range(self.dataset_start, self.dataset_used):
+            g = file_handler[str(i)]
+            U = g['U'][:]  # (t, n, 2)
+
+            # 无量纲化
+            U = U / Uinf
+
+            # 转换为张量
+            U_t = torch.tensor(U, dtype=self.dtype)  # (t, n, 2)
+            pos_t = torch.tensor(pos_dimless, dtype=self.dtype)
+            truth_index = torch.arange(pos.shape[0], dtype=torch.long)
+
+            # 物理参数张量（每个节点相同值）
+            n_nodes = pos.shape[0]
+            Uinf_t = torch.ones((n_nodes, 1), dtype=torch.float32) * Uinf
+            delta99_t = torch.ones((n_nodes, 1), dtype=torch.float32) * delta99
+
+            for idx in torch.arange(self.time_start,
+                                    self.time_start + self.time_used,
+                                    step=self.window_size):
+                if idx + self.window_size > self.time_start + self.time_used:
+                    break
+                # [t, n, c] -> [n, t, c]
+                y = U_t[idx:idx + self.window_size].transpose(0, 1)
+                if self.training:
+                    y[:, 0, :] = add_noise(y[:, 0, :], percentage=0.03)
+
+                # 读取 inlet 时变速度序列：[t_window, n_inlet, 2] -> [n_inlet, t_window, 2]
+                inlet_U_profile = U_t[idx:idx + self.window_size, inlet_index, :].transpose(0, 1)
+
+                data_list.append(Graph(pos=pos_t.clone(),
+                                       y=y.clone(),
+                                       truth_index=truth_index.clone(),
+                                       Uinf=Uinf_scalar.clone(),
+                                       delta99=delta99_scalar.clone(),
+                                       inlet_value=inlet_U_profile.clone()))
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+
+        # 计算或加载拉普拉斯矩阵
+        if osp.exists(self.processed_paths[1]):
+            laplace_matrix = torch.load(
+                self.processed_paths[1], weights_only=False)
+            d_vector = torch.load(self.processed_paths[2], weights_only=False)
+        else:
+            laplace_matrix, d_vector = compute_discrete_laplace(data_list[0])
+            laplace_matrix = laplace_matrix.clone()
+            d_vector = d_vector.unsqueeze(dim=-1).clone()
+            torch.save(laplace_matrix, self.processed_paths[1])
+            torch.save(d_vector, self.processed_paths[2])
+
+        # 设置边界条件值（不设置 laplace_matrix 和 d_vector，由 get() 动态添加）
+        for data in data_list:
+            # wall: U=V=0
+            data.dirichlet_value = torch.zeros((data.dirichlet_index.shape[0],
+                                                data.y.shape[2]))
+            # inlet: 无量纲来流速度 (1, 0)
+            if not hasattr(data, 'inlet_value'):
+                print("inlet_value is None")
+                data.inlet_value = self.inlet_velocity(data.inlet_index, 1.)
+            graph_padding(data, clone=True)
+
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+    @staticmethod
+    def inlet_velocity(inlet_index, u_inf, pos=None, timesteps=1):
+        """
+        inlet 速度剖面（时不变）
+
+        Args:
+            inlet_index: inlet 节点索引
+            u_inf: 无量纲来流速度
+            pos: 节点位置 (n, 2)，可选。如果提供，可基于位置计算边界层剖面
+            timesteps: 时间步数，用于时变边界条件（BLGraphDataset 使用实际数据，不调用此方法）
+
+        Returns:
+            inlet 速度，形状 (n_inlet, 2) 或 (n_inlet, timesteps, 2)（如 timesteps > 1）
+
+        注意：BLGraphDataset 在 Graph 中存储了从实际数据读取的时变 inlet 序列 (n_inlet, t, 2)，
+              此静态方法主要用于 PDEGraphDataset 等需要常数来流的情况。
+        """
+        if pos is None:
+            # 简单均匀来流 (u_inf, 0)
+            u = u_inf * torch.ones(inlet_index.shape[0])
+            v = torch.zeros_like(u)
+        else:
+            # 基于位置计算边界层剖面（如 Blasius 剖面）
+            inlet_pos = pos[inlet_index]
+            u = u_inf * torch.ones(inlet_index.shape[0])
+            v = torch.zeros_like(u)
+            # TODO: 如需要，可在此处实现基于 y 的边界层剖面计算
+
+        inlet_val = torch.stack((u, v), dim=-1)  # (n_inlet, 2)
+
+        # 如果需要时变边界条件，广播到时间维度
+        if timesteps > 1:
+            inlet_val = inlet_val.unsqueeze(1).repeat(1, timesteps, 1)  # (n_inlet, t, 2)
+
+        return inlet_val
+
+    @staticmethod
+    def dimensional(U_pred, U_gt, pos, Uinf, delta99):
+        """将无量纲结果转换回有量纲形式"""
+        U_pred = U_pred * Uinf
+        U_gt = U_gt * Uinf
+        pos = pos * delta99
+        return U_pred, U_gt, pos
+
+
+class BLGraphDataset1(InMemoryDataset):
+    def __init__(self, root, raw_files, processed_file, dataset_start,
+                 dataset_used, time_start, time_used, window_size, dtype,
+                 training=False):
+        self.raw_files = raw_files
+        self.processed_file = processed_file
+        self.laplace_file = 'laplace.pt'
+        self.d_file = 'd_vector.pt'
+        self.root = root
+        self.training = training
+
+        self.dataset_start = dataset_start
+        self.dataset_used = dataset_used
+        self.time_start = time_start
+        self.time_used = time_used
+        self.window_size = window_size
+        self.dtype = dtype
+
+        # 边界条件变换器
+        self.dirichlet_trans = Dirichlet()
+        self.inlet_trans = DirichletInlet()
+        self.node_type_trans = NodeTypeInfo()
+
+        # 图变换：使用 Delaunay 三角化生成图结构
+        self.graph_trans = T.Compose([
+            T.Delaunay(),
+            T.FaceToEdge(remove_faces=False),
+            MyDistance(norm=True),
+            MyCartesian(norm=True),
+        ])
+
+        transform = []
+        transform.append(self.dirichlet_trans)
+        transform.append(self.inlet_trans)
+        transform.append(self.node_type_trans)
+        transform.append(self.graph_trans)
+
+        super(BLGraphDataset, self).__init__(
+            root=root,
+            transform=None,
+            pre_transform=T.Compose(transform),
+            pre_filter=None
+        )
+        self.data, self.slices = torch.load(
+            self.processed_paths[0], weights_only=False)
+
+    @property
+    def raw_file_names(self) -> Union[str, List[str], Tuple]:
+        return self.raw_files
+
+    @property
+    def processed_file_names(self) -> Union[str, List[str], Tuple]:
+        return [self.processed_file, self.laplace_file, self.d_file]
+
+    def download(self):
+        pass
+
+    def process(self):
+        """处理数据：laplace_matrix 单独存储，不放入样本中，避免 collate 时复制"""
+        import gc
+        import psutil
+        import time as _time
+
+        def mem_info(tag=""):
+            process = psutil.Process()
+            mem = process.memory_info().rss / 1024 / 1024
+            print(f"  [MEM] {tag}: {mem:.1f} MB")
+
+        t_start = _time.time()
+        print("=" * 60)
+        print("[START] BLGraphDataset.process()")
+        mem_info("开始处理")
+
+        file_handler = h5py.File(osp.join(self.root, self.raw_files))
+
+        # 读取图结构信息
+        pos = file_handler['pos'][:]
+        print(f"[INFO] 节点数量: {pos.shape[0]}")
+
+        # 读取物理参数
+        Uinf = file_handler.attrs['Uinf']
+        delta99 = file_handler.attrs['delta99']
+
+        # 读取节点类型并设置边界条件
+        node_type = file_handler['node_type']
+        wall_index, inlet_index = \
+            node_type['wall'][:], node_type['inlet'][:]
+        self.dirichlet_trans.set_index(wall_index)
+        self.inlet_trans.set_index(inlet_index)
+        self.node_type_trans.set_type_dict(node_type)
+
+        # 无量纲化特征尺度
+        pos_dimless = pos / delta99
+
+        # 转换为张量（只转换一次）
+        pos_t = torch.tensor(pos_dimless, dtype=self.dtype)
+        truth_index = torch.arange(pos.shape[0], dtype=torch.long)
+
+        # 物理参数存储为标量（大幅节省内存）
+        Uinf_scalar = torch.tensor(Uinf, dtype=torch.float32)
+        delta99_scalar = torch.tensor(delta99, dtype=torch.float32)
+        mem_info("读取共享数据后")
+
+        # ===== 第1步：处理第一个样本，用于计算拉普拉斯矩阵 =====
+        print("-" * 60)
+        print("[STEP 1] 预处理第一个样本以计算拉普拉斯矩阵")
+        first_sample = self._create_single_sample(
+            file_handler, self.dataset_start, self.time_start,
+            pos_t, truth_index, Uinf, Uinf_scalar, delta99_scalar, inlet_index
+        )
+        if self.pre_filter is not None and not self.pre_filter(first_sample):
+            first_sample = None
+        elif self.pre_transform is not None:
+            first_sample = self.pre_transform(first_sample)
+
+        # 诊断：打印第一个样本各字段大小
+        total_size = 0
+        print("\n[DIAG] 第一个样本各字段大小:")
+        for key, value in first_sample:
+            if isinstance(value, torch.Tensor):
+                size_mb = value.element_size() * value.nelement() / 1024 / 1024
+                total_size += size_mb
+                print(f"  {key}: shape={value.shape}, dtype={value.dtype}, "
+                      f"size={size_mb:.2f} MB")
+        print(f"  [TOTAL] 单个样本总大小: {total_size:.2f} MB\n")
+
+        # 计算或加载拉普拉斯矩阵
+        laplace_matrix, d_vector = self._get_or_compute_laplace(first_sample)
+        lap_size = laplace_matrix.element_size() * laplace_matrix.nelement() / 1024 / 1024
+        dvec_size = d_vector.element_size() * d_vector.nelement() / 1024 / 1024
+        print(f"[DIAG] laplace_matrix: {laplace_matrix.shape}, {lap_size:.2f} MB")
+        print(f"[DIAG] d_vector: {d_vector.shape}, {dvec_size:.2f} MB")
+        mem_info("计算拉普拉斯后")
+        del first_sample
+        gc.collect()
+
+        # ===== 第2步：创建所有样本（不存储 laplace_matrix） =====
+        print("-" * 60)
+        print("[STEP 2] 创建所有样本（laplace_matrix 单独存储，不放入样本）")
+        all_samples = []
+        total_samples = 0
+
+        for i in range(self.dataset_start, self.dataset_used):
+            t_ds = _time.time()
+            g = file_handler[str(i)]
+            U = g['U'][:]  # (t, n, 2)
+            print(f"\n[DATASET {i}] 加载数据 shape={U.shape}")
+
+            # 无量纲化
+            U = U / Uinf
+
+            # 转换为张量
+            U_t = torch.tensor(U, dtype=self.dtype)
+            del U
+            mem_info(f"数据集 {i} 加载后")
+
+            n_windows = 0
+            for idx in torch.arange(self.time_start,
+                                    self.time_start + self.time_used,
+                                    step=self.window_size):
+                if idx + self.window_size > self.time_start + self.time_used:
+                    break
+
+                # [t, n, c] -> [n, t, c]
+                y = U_t[idx:idx + self.window_size].transpose(0, 1)
+                if self.training:
+                    y = y.clone()
+                    y[:, 0, :] = add_noise(y[:, 0, :], percentage=0.03)
+
+                # 读取 inlet 时变速度序列
+                inlet_U_profile = U_t[idx:idx + self.window_size, inlet_index, :].transpose(0, 1).clone()
+
+                data = Graph(
+                    pos=pos_t,
+                    y=y,
+                    truth_index=truth_index,
+                    Uinf=Uinf_scalar,
+                    delta99=delta99_scalar,
+                    inlet_value=inlet_U_profile
+                )
+
+                # 应用预变换（Delaunay、边界条件等）
+                if self.pre_filter is not None and not self.pre_filter(data):
+                    continue
+                if self.pre_transform is not None:
+                    data = self.pre_transform(data)
+
+                # 设置边界条件值（但不设置 laplace_matrix 和 d_vector）
+                data.dirichlet_value = torch.zeros(
+                    (data.dirichlet_index.shape[0], data.y.shape[2]))
+                if not hasattr(data, 'inlet_value'):
+                    data.inlet_value = self.inlet_velocity(data.inlet_index, 1.)
+                graph_padding(data, clone=True)
+
+                all_samples.append(data)
+                total_samples += 1
+                n_windows += 1
+
+            print(f"[DATASET {i}] 完成: {n_windows} 个窗口, "
+                  f"耗时 {_time.time() - t_ds:.2f}s")
+
+            # 每个数据集结束后释放 U_t
+            del U_t
+            gc.collect()
+            mem_info(f"数据集 {i} 处理后")
+
+        print(f"\n[SUMMARY] 共创建 {total_samples} 个样本")
+
+        # ===== 第3步：合并所有样本 =====
+        print("-" * 60)
+        print("[STEP 3] 合并所有样本（无 laplace_matrix，内存占用低）")
+        t_merge = _time.time()
+        data, slices = self.collate(all_samples)
+        all_samples = None
+        gc.collect()
+        print(f"  [TIME] 合并耗时: {_time.time() - t_merge:.2f}s")
+        mem_info("合并所有样本后")
+
+        print("[SAVE] 保存数据")
+        t_save = _time.time()
+        torch.save((data, slices), self.processed_paths[0])
+        print(f"  [TIME] 保存耗时: {_time.time() - t_save:.2f}s")
+        mem_info("保存数据后")
+
+        print("=" * 60)
+        print(f"[DONE] 总耗时: {_time.time() - t_start:.2f}s")
+        print("=" * 60)
+
+    def _create_single_sample(self, file_handler, dataset_idx, time_idx,
+                              pos_t, truth_index, Uinf, Uinf_scalar,
+                              delta99_scalar, inlet_index):
+        """创建单个样本（未变换）"""
+        g = file_handler[str(dataset_idx)]
+        U = g['U'][time_idx:time_idx + self.window_size]  # (t, n, 2)
+        U = U / Uinf
+
+        U_t = torch.tensor(U, dtype=self.dtype)
+        y = U_t.transpose(0, 1)  # [n, t, c]
+
+        inlet_U_profile = U_t[:, inlet_index, :].transpose(0, 1).clone()
+
+        return Graph(
+            pos=pos_t,
+            y=y,
+            truth_index=truth_index,
+            Uinf=Uinf_scalar,
+            delta99=delta99_scalar,
+            inlet_value=inlet_U_profile
+        )
+
+    def _get_or_compute_laplace(self, sample_data):
+        """计算或加载拉普拉斯矩阵"""
+        print("计算或加载拉普拉斯矩阵")
+        if osp.exists(self.processed_paths[1]):
+            print("加载拉普拉斯矩阵")
+            laplace_matrix = torch.load(
+                self.processed_paths[1], weights_only=False)
+            d_vector = torch.load(self.processed_paths[2], weights_only=False)
+            # 加载的已经是 unsqueezed 的版本
+        else:
+            print("计算拉普拉斯矩阵")
+            laplace_matrix, d_vector = compute_discrete_laplace(sample_data)
+            d_vector = d_vector.unsqueeze(dim=-1)  # 先 unsqueeze
+            torch.save(laplace_matrix, self.processed_paths[1])
+            torch.save(d_vector, self.processed_paths[2])  # 保存 unsqueezed 版本
+        return laplace_matrix, d_vector
+
+    @staticmethod
+    def inlet_velocity(inlet_index, u_inf, pos=None, timesteps=1):
+        """
+        inlet 速度剖面（时不变）
+
+        Args:
+            inlet_index: inlet 节点索引
+            u_inf: 无量纲来流速度
+            pos: 节点位置 (n, 2)，可选
+            timesteps: 时间步数
+
+        Returns:
+            inlet 速度，形状 (n_inlet, 2) 或 (n_inlet, timesteps, 2)
+        """
+        if pos is None:
+            u = u_inf * torch.ones(inlet_index.shape[0])
+            v = torch.zeros_like(u)
+        else:
+            inlet_pos = pos[inlet_index]
+            u = u_inf * torch.ones(inlet_index.shape[0])
+            v = torch.zeros_like(u)
+
+        inlet_val = torch.stack((u, v), dim=-1)  # (n_inlet, 2)
+
+        if timesteps > 1:
+            inlet_val = inlet_val.unsqueeze(1).repeat(1, timesteps, 1)
+
+        return inlet_val
+
+    @staticmethod
+    def dimensional(U_pred, U_gt, pos, Uinf, delta99):
+        """
+        将无量纲结果转换回有量纲形式
+        
+        Args:
+            U_pred: 预测速度（无量纲）
+            U_gt: 真实速度（无量纲）
+            pos: 位置（无量纲）
+            Uinf: 标量或张量形式的参考速度
+            delta99: 标量或张量形式的特征长度
+        """
+        # 如果是标量，自动广播；如果是张量，按原逻辑处理
+        U_pred = U_pred * Uinf
+        U_gt = U_gt * Uinf
+        pos = pos * delta99
+        return U_pred, U_gt, pos
