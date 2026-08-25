@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 
 from .mpnn_block import MPNNBlock
 from .encoder_decoder import Encoder, Decoder
@@ -389,34 +390,48 @@ class BLModel(nn.Module):
         }
         self.update = update_fn[integral]
 
-    def forward(self, graph: Graph, steps):
+    def forward(self, graph: Graph, steps, progress_bar:bool = False):
         """
         前向传播：roll-out 预测
 
         Args:
             graph (Graph): Graph(y=(n, 2), pos=(n, 2), edge_index=(2, e),
-                laplace_matrix=(n, n), Uinf, delta99, mu, rho, dt)
+                laplace_matrix=(n, n), Uinf, delta99, mu, rho, dt,
+                inlet_value=(m, t, 2) 时变边界条件)
             steps (int): roll-out 步数
 
         Returns:
             loss_states: [t, n', 2] 预测的速度序列
         """
+        # print("=" * 50)
+        # print(type(graph))
+        # # print(graph)
+        # print(graph.y.shape)
+        # print(graph.inlet_value.shape)
+        # print(graph.inlet_index.shape)
+        # print("=" * 50)
+        # # raise
+
         loss_states = [graph.y]  # [n, 2]
         # unroll for 1 step
+        graph.inlet_value1 = graph.inlet_value[:, 0, :]
         graph_next = self.update(graph)
         loss_states.append(graph_next.y)
 
         graph = graph_next.detach()
         # unroll for steps-1
-        for step in range(steps - 1):
+        for step in range(steps - 1) if not progress_bar else tqdm(range(steps - 1)):
+            graph.inlet_value1 = graph.inlet_value[:, step + 1, :]
             graph_next = self.update(graph)
             loss_states.append(graph_next.y)
             graph = graph_next
 
+        # raise
+
         # [t, n, 2]
         loss_states = torch.stack(loss_states, dim=0)
         # 只返回 truth_index 对应的节点（排除边界）
-        return torch.index_select(loss_states, 1, graph.truth_index)
+        return loss_states
 
     def get_temporal_diff(self, graph: Graph):
         """
@@ -430,7 +445,7 @@ class BLModel(nn.Module):
         """
         # 节点编码: [y:2 + pos:2 + node_type:4] -> [n, h]
         node_type = torch.nn.functional.one_hot(graph.node_type)
-        graph.state_node = self.node_encoder(
+        graph.state_node = self.node_encoder.forward(
             torch.cat((graph.y, graph.pos, node_type), dim=-1))
 
         # 存储边界节点的隐藏状态（用于 padding）
@@ -444,20 +459,20 @@ class BLModel(nn.Module):
         # 边编码: [relative_y:2 + edge_attr:3 (distance, cartesian_x, cartesian_y)] -> [e, h]
         rel_state = graph.y[graph.edge_index[1, :]] - \
             graph.y[graph.edge_index[0, :]]  # [e, 2]
-        graph.state_edge = self.edge_encoder(
+        graph.state_edge = self.edge_encoder.forward(
             torch.cat((rel_state, graph.edge_attr), dim=-1))
 
         # MPNN 消息传递
-        mpnn_out = self.mpnn_block(graph)  # [n, h]
-        decoder_out = self.decoder(mpnn_out)  # [n, 2]
+        mpnn_out = self.mpnn_block.forward(graph)  # [n, h]
+        decoder_out = self.decoder.forward(mpnn_out)  # [n, 2]
 
         # 拉普拉斯项（粘性扩散）
-        laplace = self.laplace_block(graph)  # [n, 2]
+        laplace = self.laplace_block.forward(graph)  # [n, 2]
 
         # 边界层流物理模型: du/dt = (1/Re) * ∇²u + convection + pressure
         # 这里简化为: du/dt = (1/Re) * ∇²u + NN(u, x, t)
-        Uinf, delta99, mu = graph.Uinf, graph.delta99, graph.mu  # [n, 1]
-        Re = Uinf * delta99 / mu  # [n, 1] 边界层雷诺数
+        Uinf, delta99, mu = graph.Uinf, graph.delta99, graph.mu  # 标量
+        Re = Uinf * delta99 / mu  # 边界层雷诺数
         out = 1 / Re * laplace + decoder_out
 
         return out
