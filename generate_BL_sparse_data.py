@@ -11,6 +11,8 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple
 
+dY = -0.000352  # y 偏置补偿
+
 
 def create_mesh_structure(height: int, width: int) -> np.ndarray:
     """
@@ -120,7 +122,7 @@ def create_sparse_dirichlet_indices(height: int, width: int, sparse_rate: int) -
     for i in range(1, height):
         for j in range(width):
             # 检查是否是稀疏采样的点
-            if i == 1 or (i % sparse_rate == 0 and j % sparse_rate == 0):
+            if (i - 1) % sparse_rate == 0 and j % sparse_rate == 0:
                 node_idx = i * width + j
                 exp_indices.append(node_idx)
 
@@ -341,6 +343,7 @@ def generate_bl_data_file(
 
         # 添加密集图结构信息
         f.create_dataset('mesh', data=mesh)
+        pos[:, 1] += dY
         f.create_dataset('pos', data=pos)
 
         # 添加节点类型（可能进行了稀疏采样）
