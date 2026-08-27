@@ -49,7 +49,7 @@ def main():
         dataset_start=config['te_dataset_start'],
         dataset_used=config['te_dataset_used'],
         time_start=config['time_start'],
-        time_used=config['time_used'],
+        time_used=config['te_window_size'],  # 使用 te_window_size 作为 time_used
         window_size=config['te_window_size'],
         dtype=config['dtype']
     )
