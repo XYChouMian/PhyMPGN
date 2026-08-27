@@ -36,11 +36,10 @@ class LaplaceBlock(nn.Module):
 
         # print("=" * 50)
         # print("调试，测试索引 edge_index:")
-        # graph.edge_index
         # print(f"{graph.edge_index.shape=}")
         # print(f"{graph.edge_index.dtype=}")
         # print("=" * 50)
-        # raise
+        # # raise
         # print("="*50)
         # print(h.shape)
         # print(graph.edge_attr.shape)

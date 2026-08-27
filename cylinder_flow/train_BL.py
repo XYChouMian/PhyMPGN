@@ -17,6 +17,7 @@ from src.utils.utils import AverageMeter, NodeType
 from src.datasets.dataset import BLGraphDataset
 from src.models.model import BLModel, MyLoss
 from test import test
+from tqdm import tqdm
 
 
 def train(model: BLModel, accelerator: Accelerator, tr_writer: SummaryWriter,
@@ -30,24 +31,43 @@ def train(model: BLModel, accelerator: Accelerator, tr_writer: SummaryWriter,
     for epoch in range(start_epoch, epochs + start_epoch):
         total_loss = 0
         end = time.time()
-        for batch_idx, batch in enumerate(tr_loader):
+        iteration = tqdm(tr_loader, desc=f'Epoch {epoch+1}/{epochs}')
+        for batch_idx, batch in enumerate(iteration):
             optimizer.zero_grad()
+            # print(type(batch))
+            # print(batch)
+            # print(batch.y.shape)
+            # print(batch.inlet_index.shape)
+            # print(batch.inlet_value.shape)
 
             # measure data loading time
             data_time.update(time.time() - end)
             model.train()
 
             # BatchData(y=[n, t, 2], pos=[n, 2], edge_index=[2, e], batch=[n])
+            # GraphBatch(y=[8050, 10, 2], pos=[8050, 2], truth_index=[8050],
+            # Uinf=[1], delta99=[1], mu=[1], dt=[1],
+            # inlet_value=[210, 10, 2], dirichlet_index=[50],
+            # inlet_index=[210], node_type=[8050],
+            # face=[3, 16078], edge_index=[2, 48254],
+            # distance=[48254, 1], edge_attr=[48254, 3],
+            # rel_pos=[48254, 2], dirichlet_value=[50, 2],
+            # laplace_matrix=[1, 8050, 8050], d_vector=[8050, 1], batch=[8050], ptr=[2])
             target = batch.y.transpose(0, 1)  # [t, n, 2]
             batch.y = target[0]  # [n, 2] 初始状态
+            # print(batch.y.shape)
             graph = batch
             t = target.shape[0]
-            U_pred = model(graph, steps=t-1)  # [t, n', 2]
-            target = torch.index_select(target, 1, batch.truth_index)  # [t, n', 2]
+            U_pred = model.forward(graph, steps=t-1)  # [t, n', 2]
 
             # 损失掩码：只计算内部节点和出口节点（排除 wall 和 inlet）
             mask = torch.logical_or(graph.node_type == NodeType.NORMAL,
                                     graph.node_type == NodeType.OUTLET)
+            # print("=" * 50)
+            # print(mask.shape)
+            # print(U_pred.shape)
+            # print(target.shape)
+            # print("=" * 50)
             tr_batch_loss = loss_func(U_pred, target, mask)
 
             # 检查 NaN
@@ -255,7 +275,7 @@ def main():
             dataset_start=config['te_dataset_start'],
             dataset_used=config['te_dataset_used'],
             time_start=config['time_start'],
-            time_used=config['time_used'],
+            time_used=config['te_window_size'],  # 使用 te_window_size 作为 time_used
             window_size=config['te_window_size'],
             dtype=config['dtype']
         )
