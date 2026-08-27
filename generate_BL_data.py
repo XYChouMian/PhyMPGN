@@ -363,19 +363,19 @@ def generate_bl_data():
     """主函数：生成边界层数据集"""
     # 数据路径配置
     source_file = Path("/home/wqx/projects/CFD-paradigm/data/Data_1mm.h5")
-    output_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl")
+    output_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl_7100")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ===== 训练集配置 =====
     TRAIN_GROUPS = [1, 2]              # 训练集组索引
-    TRAIN_X_TRUNCATE = 50              # 训练集x方向截断宽度
-    TRAIN_Y_TRUNCATE = 160              # 训练集y方向截断高度
+    TRAIN_X_TRUNCATE = 100              # 训练集x方向截断宽度
+    TRAIN_Y_TRUNCATE = 70              # 训练集y方向截断高度
     TRAIN_T_TRUNCATE = 2000            # 训练集时间步截断数量
 
     # ===== 测试集配置 =====
-    TEST_GROUPS = [2,]      # 测试集组索引
-    TEST_X_TRUNCATE = 50               # 测试集x方向截断宽度
-    TEST_Y_TRUNCATE = 160               # 测试集y方向截断高度
+    TEST_GROUPS = [3,]      # 测试集组索引
+    TEST_X_TRUNCATE = 100               # 测试集x方向截断宽度
+    TEST_Y_TRUNCATE = 70               # 测试集y方向截断高度
     TEST_T_TRUNCATE = 4000             # 测试集时间步截断数量
 
     print(f"📖 打开源数据文件: {source_file}")
