@@ -132,7 +132,7 @@ def create_sparse_dirichlet_indices(height: int, width: int, sparse_rate: int) -
 
     sparse_node_type = {
         'inner': np.array(inner_indices, dtype=np.int32),
-        'exp': np.array(exp_indices, dtype=np.int32),
+        'inlet': np.array(exp_indices, dtype=np.int32),
         'wall': np.array(wall_indices, dtype=np.int32)
     }
 
