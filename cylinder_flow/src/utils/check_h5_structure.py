@@ -90,8 +90,10 @@ if __name__ == "__main__":
     # data_dir = Path("/home/wqx/projects/PhyMPGN/data/wave")
     # data_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_cf")
     # data_dir = Path("/home/wqx/projects/CFD-paradigm/data")
-    data_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl")
     # data_dir = Path("/mnt/d/study/2023-2024-1/FLUENT/1_Vortex_Streets/TP/2-different Re comparison/Re4000")
+    # data_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl_8050")
+    # data_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl_7100")
+    data_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl_sparse_7070")
 
     # 查找所有的 HDF5 文件
     h5_files = list(data_dir.glob("*.h5"))

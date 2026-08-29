@@ -321,10 +321,10 @@ class NodeTypeInfo(BaseTransform):
             node_type[data.dirichlet_index] = NodeType.OBSTACLE
         if hasattr(data, 'inlet_index'):
             node_type[data.inlet_index] = NodeType.INLET
-
-        outlet_index = self.type_dict['outlet'][:]
-        outlet_index = torch.tensor(outlet_index, dtype=torch.long)
-        node_type[outlet_index] = NodeType.OUTLET
+        if 'outlet' in self.type_dict:
+            outlet_index = self.type_dict['outlet'][:]
+            outlet_index = torch.tensor(outlet_index, dtype=torch.long)
+            node_type[outlet_index] = NodeType.OUTLET
         return node_type
 
 
