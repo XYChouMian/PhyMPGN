@@ -202,7 +202,19 @@ class BLVelocityFieldVisualizer:
         # 创建三角网格
         tri = Triangulation(pos[:, 0], pos[:, 1], face)
 
-        fig, axes = plt.subplots(3, 3, figsize=(22, 16))
+        # 根据数据比例计算figsize
+        x_range = pos[:, 0].max() - pos[:, 0].min()
+        y_range = pos[:, 1].max() - pos[:, 1].min()
+        aspect_ratio = x_range / y_range
+        
+        # 基础大小，根据比例调整
+        base_size = 12
+        if aspect_ratio > 1:
+            figsize = (base_size * aspect_ratio, base_size)
+        else:
+            figsize = (base_size, base_size / aspect_ratio)
+        
+        fig, axes = plt.subplots(3, 3, figsize=figsize)
 
         # 物理时间
         phys_time = time_idx * dt_physical
@@ -310,7 +322,7 @@ class BLVelocityFieldVisualizer:
         if save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=200, bbox_inches='tight')
-            print(f"  已保存: {save_path}")
+            # print(f"  已保存: {save_path}")
 
         plt.close()
 
@@ -337,8 +349,10 @@ class BLVelocityFieldVisualizer:
             'error_mag': all_error_mag.max(),
         }
 
-    def create_time_series_visualization(self, pred_sequence, truth_sequence,
-                                         time_steps=None, save_dir=None,):
+    def create_time_series_visualization(
+        self, pred_sequence, truth_sequence,
+        pos, face,dt_physical,
+        time_steps=None, save_dir=None,):
         """
         创建时序可视化
 
@@ -364,7 +378,7 @@ class BLVelocityFieldVisualizer:
 
         total_steps = pred_sequence.shape[0]
         if time_steps is None:
-            num_frames = min(200, total_steps)
+            num_frames = min(201, total_steps)
             time_steps = [int(t) for t in np.linspace(0, total_steps - 1,
                                           num_frames, dtype=int)]
         print(f"将可视化 {len(time_steps)} 个时间步")
@@ -384,17 +398,17 @@ class BLVelocityFieldVisualizer:
 
         # 逐时间步生成对比图
         for t_idx in tqdm(time_steps, desc='生成对比图'):
-            # truth_u = truth_sequence[t_idx, :, 0]
-            # pred_u = pred_sequence[t_idx, :, 0]
-            # truth_v = truth_sequence[t_idx, :, 1]
-            # pred_v = pred_sequence[t_idx, :, 1]
+            truth_u = truth_sequence[t_idx, :, 0]
+            pred_u = pred_sequence[t_idx, :, 0]
+            truth_v = truth_sequence[t_idx, :, 1]
+            pred_v = pred_sequence[t_idx, :, 1]
 
-            # save_path = os.path.join(
-            #     save_dir, f'bl_velocity_t{t_idx:04d}.png')
-            # self.plot_comprehensive_comparison(
-            #     truth_u, pred_u, truth_v, pred_v,
-            #     t_idx, pos, face, dt_physical,
-            #     save_path=save_path, global_ranges=global_ranges)
+            save_path = os.path.join(
+                save_dir, f'bl_velocity_t{t_idx:04d}.png')
+            self.plot_comprehensive_comparison(
+                truth_u, pred_u, truth_v, pred_v,
+                t_idx, pos, face, dt_physical,
+                save_path=save_path, global_ranges=global_ranges)
 
             # 每生成一张图片就更新JSON文件
             completed_time_steps.append(int(t_idx))
@@ -482,7 +496,7 @@ def main():
     print("=" * 60)
 
     # 创建可视化器
-    visualizer = BLVelocityFieldVisualizer(config_path='configs/train_BL_7100.yaml')
+    visualizer = BLVelocityFieldVisualizer(config_path='configs/train_BL_sparse_7070.yaml')
 
     # 加载模型和数据
     model, dataset, device = visualizer.load_model_and_data()
@@ -493,7 +507,7 @@ def main():
 
     # 确定可视化时间步（均匀分布 200 帧）
     total_steps = pred_sequence.shape[0]
-    num_frames = min(200, total_steps)
+    num_frames = min(201, total_steps)
     time_steps = list(np.linspace(0, total_steps - 1, num_frames, dtype=int))
     print(f"\n将可视化 {len(time_steps)} 个时间步")
 
@@ -501,6 +515,9 @@ def main():
     visualizer.create_time_series_visualization(
         pred_sequence=pred_sequence,
         truth_sequence=truth_sequence,
+        pos=pos,
+        face=face,
+        dt_physical=dt_val,
         time_steps=time_steps,
         save_dir=None,
     )
