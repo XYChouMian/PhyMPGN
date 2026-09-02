@@ -10,6 +10,8 @@ import h5py
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple
+import shutil
+
 
 dY = -0.000352  # y 偏置补偿
 
@@ -144,7 +146,9 @@ def read_and_truncate_group_data(
     group_idx: int,
     x_truncate: int = None,
     y_truncate: int = None,
-    t_truncate: int = None
+    t_truncate: int = None,
+    x_start_idx: int = 0,
+    t_start_idx: int = 0
 ) -> tuple:
     """
     读取并截断单个组的数据（保持密集数据）
@@ -155,6 +159,8 @@ def read_and_truncate_group_data(
         x_truncate: x方向截断宽度，None表示不截断
         y_truncate: y方向截断高度，None表示不截断
         t_truncate: 时间步截断数量，None表示不截断
+        x_start_idx: x方向第一个点索引位置，默认从0开始
+        t_start_idx: 时间步第一个索引位置，默认从0开始
 
     Returns:
         (U_data, V_data): 该组的速度场数据（可能被截断，但保持密集）
@@ -164,8 +170,9 @@ def read_and_truncate_group_data(
 
     # 在时间维度截断（沿第0个维度）
     if t_truncate is not None:
-        U_data = U_data[:t_truncate]  # shape: (t_truncate, 169, 169)
-        V_data = V_data[:t_truncate]
+        # shape: (t_truncate, 169, 169)
+        U_data = U_data[t_start_idx:t_start_idx + t_truncate]
+        V_data = V_data[t_start_idx:t_start_idx + t_truncate]
 
     # 在y方向截断（沿第1个维度）
     if y_truncate is not None:
@@ -174,8 +181,9 @@ def read_and_truncate_group_data(
 
     # 在x方向截断（沿第2个维度）
     if x_truncate is not None:
-        U_data = U_data[:, :, :x_truncate]  # shape: (t, y, x_truncate)
-        V_data = V_data[:, :, :x_truncate]
+        U_data = U_data[:, :, x_start_idx:x_start_idx +
+                        x_truncate]  # shape: (t, y, x_truncate)
+        V_data = V_data[:, :, x_start_idx:x_start_idx + x_truncate]
 
     return U_data, V_data
 
@@ -293,7 +301,7 @@ def generate_bl_data_file(
     y_truncate: int = None,
     t_truncate: int = None,
     sparse_rate: int = None
-) -> None:
+) -> int:
     """
     生成边界层数据文件（保持密集图结构和数据，只对边界条件进行稀疏采样）
 
@@ -310,17 +318,26 @@ def generate_bl_data_file(
         y_truncate: y方向截断高度，None表示不截断
         t_truncate: 时间步截断数量，None表示不截断
         sparse_rate: 边界条件稀疏采样率，None表示不进行稀疏采样
-    """
+
+    Returns:
+        num_dataset: 生成的数据集个数
+       """
     print(f"💾 生成数据文件: {output_file}")
     print(f"   包含组: {group_indices}")
+    num_exp, num_t, num_y, num_x = source_h5['U'].shape
+    print(f"   原始数据形状: exp={num_exp}, t={num_t}, y={num_y}, x={num_x}")
+
     if x_truncate is not None:
         print(f"   x方向截断宽度: {x_truncate}")
+        print(f"   x数据集个数: {num_x // x_truncate}")
     if y_truncate is not None:
         print(f"   y方向截断高度: {y_truncate}")
     if t_truncate is not None:
         print(f"   时间步截断: {t_truncate}")
+        print(f"   时间步数据集个数: {num_t // t_truncate}")
     if sparse_rate is not None:
         print(f"   边界条件稀疏采样率: {sparse_rate}x{sparse_rate}")
+    
 
     with h5py.File(output_file, 'w') as f:
         # 添加全局属性
@@ -352,26 +369,36 @@ def generate_bl_data_file(
             node_type_group.create_dataset(name, data=indices)
 
         # 分组添加数据（保持密集数据）
+        count = 0
         for i, group_idx in enumerate(group_indices):
-            print(f"   处理第 {group_idx} 组...")
+            print(f"   处理原始数据中的第 {group_idx} 组...")
+            for t_idx in range(num_t // t_truncate):
+                for x_idx in range(num_x // x_truncate):
+                    print(f"      生成数据集编号 {count}...")
 
-            # 读取该组数据（保持密集）
-            U_data, V_data = read_and_truncate_group_data(
-                source_h5, group_idx, x_truncate, y_truncate, t_truncate
-            )
+                    # 读取该组数据（保持密集）
+                    U_data, V_data = read_and_truncate_group_data(
+                        source_h5, group_idx,
+                        x_truncate, y_truncate, t_truncate,
+                        x_start_idx=x_truncate * x_idx,
+                        t_start_idx=t_truncate * t_idx
+                    )
 
-            # 处理数据（添加wall行，保持密集）
-            velocity_data = process_single_group(U_data, V_data)
+                    # 处理数据（添加wall行，保持密集）
+                    velocity_data = process_single_group(U_data, V_data)
 
-            # 创建组并保存数据
-            group = f.create_group(str(i))
-            group.create_dataset('U', data=velocity_data)
-            group.attrs['dt'] = source_attrs.get('dT', 0.0010000000474974513)
-            group.attrs['Re'] = (source_attrs.get('Uinf', 0.35199999809265137) *
-                                 source_attrs.get('delta99', 0.04490000009536743) /
-                                 source_attrs.get('nu', 7.878999781496532e-07))
+                    # 创建组并保存数据
+                    group = f.create_group(str(count))
+                    group.create_dataset('U', data=velocity_data)
+                    group.attrs['dt'] = source_attrs.get('dT', 0.0010000000474974513)
+                    group.attrs['Re'] = (source_attrs.get('Uinf', 0.35199999809265137) *
+                                        source_attrs.get('delta99', 0.04490000009536743) /
+                                        source_attrs.get('nu', 7.878999781496532e-07))
 
-            print(f"      完成: shape = {velocity_data.shape}")
+                    print(f"      完成: shape = {velocity_data.shape}")
+                    count += 1
+        f.attrs['num_dataset'] = count
+    return count
 
 
 def generate_grid_and_topology(
@@ -431,18 +458,18 @@ def generate_bl_data():
     """主函数：生成边界层数据集"""
     # 数据路径配置
     source_file = Path("/home/wqx/projects/CFD-paradigm/data/Data_1mm.h5")
-    output_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl_sparse_7070")
+    output_dir = Path("/home/wqx/projects/PhyMPGN/data/2d_bl_sparse_7070_multi")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ===== 训练集配置 =====
-    TRAIN_GROUPS = [1, 2]              # 训练集组索引
+    TRAIN_GROUPS = [i for i in range(8)]              # 训练集组索引
     TRAIN_X_TRUNCATE = 70              # 训练集x方向截断宽度（修改为70）
     TRAIN_Y_TRUNCATE = 100             # 训练集y方向截断高度（修改为100）
     TRAIN_T_TRUNCATE = 2000            # 训练集时间步截断数量
     TRAIN_SPARSE_RATE = 4              # 训练集边界条件稀疏采样率（每4x4区域采样1个点）
 
     # ===== 测试集配置 =====
-    TEST_GROUPS = [3,]                 # 测试集组索引
+    TEST_GROUPS = [8, 9]                 # 测试集组索引
     TEST_X_TRUNCATE = 70               # 测试集x方向截断宽度（修改为70）
     TEST_Y_TRUNCATE = 100              # 测试集y方向截断高度（修改为100）
     TEST_T_TRUNCATE = 4000             # 测试集时间步截断数量
@@ -478,14 +505,15 @@ def generate_bl_data():
         for name, indices in node_type_tr.items():
             print(f"   {name}节点数: {len(indices)}")
 
-        train_file = output_dir / \
-            f"train_bl_sparse_{len(TRAIN_GROUPS)}x{n_timesteps_tr}x{n_nodes_tr}x2.h5"
-
-        generate_bl_data_file(
-            source_file, train_file, TRAIN_GROUPS, source_h5,
+        num_dataset = generate_bl_data_file(
+            source_file, output_dir / f"temp.h5", TRAIN_GROUPS, source_h5,
             pos_tr, mesh_tr, node_type_tr, source_attrs,
             TRAIN_X_TRUNCATE, TRAIN_Y_TRUNCATE, TRAIN_T_TRUNCATE, TRAIN_SPARSE_RATE
         )
+        
+        train_file = output_dir / \
+            f"train_bl_sparse_{num_dataset}x{n_timesteps_tr}x{n_nodes_tr}x2.h5"
+        shutil.move(output_dir / "temp.h5", train_file)
 
         # ===== 生成测试数据 =====
         print(f"\n{'='*50}")
@@ -506,14 +534,15 @@ def generate_bl_data():
         for name, indices in node_type_te.items():
             print(f"   {name}节点数: {len(indices)}")
 
-        test_file = output_dir / \
-            f"test_bl_sparse_{len(TEST_GROUPS)}x{n_timesteps_te}x{n_nodes_te}x2.h5"
-
-        generate_bl_data_file(
-            source_file, test_file, TEST_GROUPS, source_h5,
+        num_dataset = generate_bl_data_file(
+            source_file, output_dir / f"temp.h5", TEST_GROUPS, source_h5,
             pos_te, mesh_te, node_type_te, source_attrs,
             TEST_X_TRUNCATE, TEST_Y_TRUNCATE, TEST_T_TRUNCATE, TEST_SPARSE_RATE
         )
+        
+        test_file = output_dir / \
+            f"test_bl_sparse_{num_dataset}x{n_timesteps_te}x{n_nodes_te}x2.h5"
+        shutil.move(output_dir / "temp.h5", test_file)
 
     print(f"\n✅ 数据生成完成!")
     print(f"   训练数据: {train_file}")
