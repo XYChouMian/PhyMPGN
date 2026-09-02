@@ -1,3 +1,2 @@
 # conda activate phympgn
-python generate_data_BL.py --file configs/train_BL_sparse_7070.yaml  # 生成训练/验证数据缓存
-python train_BL.py --file configs/train_BL_sparse_7070.yaml          # 开始训练
+python train_BL.py --file configs/train_BL_sparse_7070_multi.yaml          # 开始训练
