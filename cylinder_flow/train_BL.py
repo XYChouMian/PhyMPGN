@@ -266,41 +266,41 @@ def main():
         start_epoch=config['start_epoch']
     )
 
-    if accelerator.is_main_process:
-        # 测试数据集
-        te_dataset = BLGraphDataset(
-            root=config['data_root_dir'],
-            raw_files=config['te_raw_data'],
-            processed_file=config['te_processed_file'],
-            dataset_start=config['te_dataset_start'],
-            dataset_used=config['te_dataset_used'],
-            time_start=config['time_start'],
-            time_used=config['te_window_size'],  # 使用 te_window_size 作为 time_used
-            window_size=config['te_window_size'],
-            dtype=config['dtype']
-        )
-        te_loader = DataLoader(
-            dataset=te_dataset
-        )
+    # if accelerator.is_main_process:
+    #     # 测试数据集
+    #     te_dataset = BLGraphDataset(
+    #         root=config['data_root_dir'],
+    #         raw_files=config['te_raw_data'],
+    #         processed_file=config['te_processed_file'],
+    #         dataset_start=config['te_dataset_start'],
+    #         dataset_used=config['te_dataset_used'],
+    #         time_start=config['time_start'],
+    #         time_used=config['te_window_size'],  # 使用 te_window_size 作为 time_used
+    #         window_size=config['te_window_size'],
+    #         dtype=config['dtype']
+    #     )
+    #     te_loader = DataLoader(
+    #         dataset=te_dataset
+    #     )
 
-        # 在单 GPU 上测试
-        accelerator.load_state(input_dir=config['ckpt_path_val'])
-        te_writer = SummaryWriter(log_dir=config['log_dir'] + '_test')
-        logger.info('Test BL Model...')
+    #     # 在单 GPU 上测试
+    #     accelerator.load_state(input_dir=config['ckpt_path_val'])
+    #     te_writer = SummaryWriter(log_dir=config['log_dir'] + '_test')
+    #     logger.info('Test BL Model...')
 
-        test(
-            model=model,
-            te_writer=te_writer,
-            te_loader=te_loader,
-            device=accelerator.device,
-            logger=logger
-        )
+    #     test(
+    #         model=model,
+    #         te_writer=te_writer,
+    #         te_loader=te_loader,
+    #         device=accelerator.device,
+    #         logger=logger
+    #     )
 
-        tr_writer.close()
-        val_writer.close()
-        te_writer.close()
+    #     tr_writer.close()
+    #     val_writer.close()
+    #     te_writer.close()
 
-        logger.info('BL Training Done!')
+    logger.info('BL Training Done!')
 
 
 if __name__ == '__main__':
