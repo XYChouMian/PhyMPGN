@@ -429,6 +429,23 @@ class BLGraphDataset(InMemoryDataset):
         self.d_vector = torch.load(
             self.processed_paths[2], weights_only=False)
 
+        self.validate()
+
+    def validate(self) -> bool:
+        """
+        验证数据集是否加载正确
+
+        Returns:
+            bool: 如果所有数据集都加载正确则返回 True，否则返回 False
+        """
+        file_handler = h5py.File(osp.join(self.root, self.raw_files))
+        num_dataset = file_handler.attrs['num_dataset']
+        if self.dataset_start + self.dataset_used > num_dataset:
+            raise ValueError(
+                f"num_dataset ({num_dataset}) is less than dataset_start ({self.dataset_start}) + dataset_used ({self.dataset_used})")
+
+        return True
+
     def get(self, idx):
         """获取单个样本，动态添加共享的 laplace_matrix（避免 collate 时复制）"""
         data = super().get(idx)
@@ -498,7 +515,8 @@ class BLGraphDataset(InMemoryDataset):
                     y[:, 0, :] = add_noise(y[:, 0, :], percentage=0.03)
 
                 # 读取 inlet 时变速度序列：[t_window, n_inlet, 2] -> [n_inlet, t_window, 2]
-                inlet_U_profile = U_t[idx:idx + self.window_size, inlet_index, :].transpose(0, 1)
+                inlet_U_profile = U_t[idx:idx + self.window_size,
+                                      inlet_index, :].transpose(0, 1)
 
                 data_list.append(Graph(pos=pos_t.clone(),
                                        y=y.clone(),
@@ -573,7 +591,8 @@ class BLGraphDataset(InMemoryDataset):
 
         # 如果需要时变边界条件，广播到时间维度
         if timesteps > 1:
-            inlet_val = inlet_val.unsqueeze(1).repeat(1, timesteps, 1)  # (n_inlet, t, 2)
+            inlet_val = inlet_val.unsqueeze(1).repeat(
+                1, timesteps, 1)  # (n_inlet, t, 2)
 
         return inlet_val
 
